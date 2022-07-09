@@ -1,0 +1,386 @@
+---
+title: "Song Popularity Prediction"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+# Import Packages
+
+```{r}
+library(car)
+library(kknn)
+library(superml)
+library(glmnet)
+library(tidyr)
+library(Hmisc)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(ggplot2)
+library(corrplot)
+```
+
+# Data Loading
+
+```{r}
+data <- read.csv("Spotify.csv")
+
+encoder <- LabelEncoder$new()
+data$Top.Genre <- encoder$fit_transform(data$Top.Genre)
+
+data$Length <- as.integer(data$Length)
+
+data <- na.omit(data)
+
+data <- data[, 2:ncol(data)]
+
+head(data)
+
+cat("Number of instances in the dataset: ", nrow(data), "\n")
+cat("Number of features in the dataset: ", ncol(data))
+```
+
+# Descriptive Statistics for Numerical Variables
+
+```{r}
+data.num <- data[, which(sapply(data, is.numeric))]
+
+describe(data.num)
+```
+
+# Exploratory Data Analysis
+
+## Distribution of Numerical Varibles: Histogram
+
+```{r}
+for (i in 1:ncol(data.num)){
+  hist(data.num[, i], main = "", xlab = colnames(data.num)[i], ylab = "Frequency", col = c("#F1B6DA"))
+}
+```
+
+## Correlation Matrix for Numerical Variables: Correlation Plot or Heatmap
+
+```{r}
+corr <- cor(data.num)
+
+corrplot(corr)
+```
+
+## Relationship between Numerical Variables and the Binary Response Variable: Box Plot
+
+```{r}
+data$Popularity_bin <- ifelse(data$Popularity >= 40, 1, 0)
+data.num$Popularity_bin <- ifelse(data$Popularity >= 40, 1, 0)
+
+data.num_ <- downSample(data.num[, 1:(ncol(data.num) - 1)], as.factor(data.num[, ncol(data.num)]))
+
+split <- 0.85 * nrow(data.num_)
+
+for (i in 1:(ncol(data.num) - 2)){
+  boxplot(data.num[, i] ~ data$Popularity_bin, main="", 
+          xlab="Popularity", ylab=colnames(data.num)[i], 
+  col=c("orange", "brown"), data=data.num)
+}
+```
+
+# Logistic Regression
+
+```{r}
+data.log <- subset(data.num_, select = -c(Popularity))
+
+data.log <- data.log[sample(1:nrow(data.log)), ]
+
+train.data.log <- data.log[1:split, ]
+test.data.log <- data.log[split+1:nrow(data.log), ]
+
+logit.model <- glm(Class~ ., family = "binomial", data = train.data.log)
+
+summary(logit.model)
+```
+
+# Logistic Regression: Multicollinearity
+
+```{r}
+vifs <- vif(logit.model)
+
+vifs
+```
+
+# Logistic Regression: Prediction
+
+```{r}
+pred.log = predict(logit.model, newdata = test.data.log[, -ncol(test.data.log)], type = "response")
+
+pred.log <- ifelse(pred.log >= 0.4, 1, 0)
+
+head(pred.log)
+```
+
+# Evaluation Function
+
+```{r}
+pred_metrics = function(modelName, actualClass, predClass) {
+  cat(modelName, '\n')
+  conmat <- confusionMatrix(table(actualClass, predClass))
+  c(conmat$overall["Accuracy"], conmat$byClass["Sensitivity"],
+  conmat$byClass["Specificity"])
+}
+```
+
+# Logistic Regression: Evaluation
+
+```{r}
+pred_metrics("Logistic Model", test.data.log[, ncol(test.data.log)], pred.log)
+```
+
+# Logistic Regression: Goodness of Fit Test
+
+```{r}
+pearres.log = residuals(logit.model,type="pearson")
+
+pearson.log = sum(pearres.log^2)
+
+round(c(pearson.log, 1-pchisq(pearson.log, 307)), 2)
+```
+
+# Logistic Regression: Residual Analysis
+
+```{r}
+res.log = resid(logit.model, type="deviance")
+
+plot(train.data.log$Energy, res.log)
+
+hist(res.log, 10, xlab="Std residuals", main="")
+
+qqnorm(res.log)
+qqline(res.log, col="blue", lwd=2)
+```
+
+# Decision Tree
+
+```{r}
+dt <- rpart(Class ~ ., method = "class", data = train.data.log)
+
+summary(dt)
+```
+
+# Decision Tree: Cross-Validation Table
+
+```{r}
+printcp(dt)
+```
+
+# Decision Tree: Complexity Parameters
+
+```{r}
+plotcp(dt, minline = TRUE, lty = 3,col = "gold")
+```
+
+# Decision Tree: Visualization
+
+```{r}
+rpart.plot(dt)
+```
+
+# Decision Tree: Prediction
+
+```{r}
+pred.dt <- predict(dt, test.data.log[, -ncol(test.data.log)], type="class")
+
+head(pred.dt)
+```
+
+# Decision Tree: Evaluation
+
+```{r}
+pred_metrics("Decision Tree", pred.dt, test.data.log[, ncol(test.data.log)])
+```
+
+# Decision Tree: Evaluation
+
+```{r}
+pred_metrics("Decision Tree", pred.dt, test.data.log[, ncol(test.data.log)])
+```
+
+# Stepwise Regression
+
+```{r}
+min.model <- glm(Class~ 1, family = "binomial", data = train.data.log)
+
+step.model <- step(min.model, scope = list(lower = min.model, upper = logit.model), direction = "both", trace = FALSE)
+
+summary(step.model)
+```
+
+# Stepwise Regression: Prediction
+
+```{r}
+pred.step = predict(step.model, newdata = test.data.log[, -ncol(test.data.log)], type = "response")
+
+pred.step <- ifelse(pred.step >= 0.4, 1, 0)
+
+head(pred.step)
+```
+
+# Stepwise Regression: Evaluation
+
+```{r}
+pred_metrics("Stepwise Regression", pred.step, test.data.log[, ncol(test.data.log)])
+```
+
+# Random Forest
+
+```{r}
+rf <- randomForest(Class~., data = train.data.log)
+
+summary(rf)
+```
+
+# Random Forest: Prediction
+
+```{r}
+pred.rf <- predict(rf, test.data.log[, -ncol(test.data.log)], type="class")
+
+head(pred.rf)
+```
+
+# Random Forest: Evaluation
+
+```{r}
+pred_metrics("Random Forest", pred.rf, test.data.log[, ncol(test.data.log)])
+```
+
+# Lasso Regression
+
+```{r}
+cv.lasso <- cv.glmnet(as.matrix(train.data.log[, 1:(ncol(train.data.log) - 1)]), train.data.log[, ncol(train.data.log)], alpha = 1, family = "binomial", nfolds=10)
+
+lasso.model <- glmnet(as.matrix(train.data.log[, 1:(ncol(train.data.log) - 1)]), train.data.log[, ncol(train.data.log)], alpha = 1, family = "binomial", nlambda=100)
+
+coef(lasso.model, s=cv.lasso$lambda.min)
+```
+
+# Lasso Regression: Visualization
+
+```{r}
+plot(lasso.model, xvar="lambda", lwd=2)
+
+abline(v=log(cv.lasso$lambda.min), col='black', lty=2, lwd=2)
+```
+
+# Lasso Regression: Prediction
+
+```{r}
+pred.lasso <- predict(cv.lasso, as.matrix(test.data.log[, -ncol(test.data.log)]), type="class")
+
+head(pred.lasso)
+```
+
+# Lasso Regression: Evaluation
+
+```{r}
+pred_metrics("Lasso Regression Model", test.data.log[, ncol(test.data.log)], pred.lasso)
+```
+
+# Ridge Regression
+
+```{r}
+cv.ridge <- cv.glmnet(as.matrix(train.data.log[, 1:(ncol(train.data.log) - 1)]), train.data.log[, ncol(train.data.log)], alpha = 0, family = "binomial", nfolds=10)
+
+ridge.model <- glmnet(as.matrix(train.data.log[, 1:(ncol(train.data.log) - 1)]), train.data.log[, ncol(train.data.log)], alpha = 0, family = "binomial", nlambda=100)
+
+coef(ridge.model, s=cv.ridge$lambda.min)
+```
+
+# Ridge Regression: Visualization
+
+```{r}
+plot(ridge.model, xvar="lambda", lwd=2)
+
+abline(v=log(cv.ridge$lambda.min), col='black', lty=2, lwd=2)
+```
+
+# Ridge Regression: Prediction
+
+```{r}
+pred.ridge <- predict(cv.ridge, as.matrix(test.data.log[, -ncol(test.data.log)]), type="class")
+
+head(pred.ridge)
+```
+
+# Ridge Regression: Evaluation
+
+
+```{r}
+pred_metrics("Ridge Regression Model", test.data.log[, ncol(test.data.log)], pred.ridge)
+```
+
+# Elastic Net Regression
+
+```{r}
+cv.el <- cv.glmnet(as.matrix(train.data.log[, 1:(ncol(train.data.log) - 1)]), train.data.log[, ncol(train.data.log)], alpha = 0.5, family = "binomial", nfolds=10)
+
+el.model <- glmnet(as.matrix(train.data.log[, 1:(ncol(train.data.log) - 1)]), train.data.log[, ncol(train.data.log)], alpha = 0.5, family = "binomial", nlambda=100)
+
+coef(el.model, s=cv.el$lambda.min)
+```
+
+# Elastic Net Regression: Visualization
+
+```{r}
+plot(el.model, xvar="lambda", lwd=2)
+
+abline(v=log(cv.el$lambda.min), col='black', lty=2, lwd=2)
+```
+
+# Elastic Net Regression: Prediction
+
+```{r}
+pred.el <- predict(cv.el, as.matrix(test.data.log[, -ncol(test.data.log)]), type="class")
+
+head(pred.el)
+```
+
+# Elastic Net Regression: Evaluation
+
+```{r}
+pred_metrics("Elastic Net Regression Model", test.data.log[, ncol(test.data.log)], pred.el)
+```
+
+# KNN 
+
+```{r}
+kknn.train <- train.kknn(Class ~ ., train.data.log, kmax = 50,
+                          kernel = c("triangular", "rectangular",
+                                     "epanechnikov", "optimal"),
+                          scale = TRUE)
+
+summary(kknn.train)
+```
+
+# KNN: K and Kernel Visualization
+
+```{r}
+plot(kknn.train)
+
+cat("\n The lowest missclassification error is achieved with a",
+    kknn.train$best.parameters[[1]],
+    "kernel and a number of nearest neighbors (k) of",
+    kknn.train$best.parameters[[2]])
+```
+
+# KNN: Prediction
+
+```{r}
+pred.knn <- predict(kknn.train, test.data.log[, -ncol(test.data.log)])
+
+head(pred.knn)
+```
+
+# KNN: Evaluation
+
+```{r}
+pred_metrics("KNN Model", test.data.log[, ncol(test.data.log)][1:57], pred.knn)
+```
