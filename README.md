@@ -72,10 +72,6 @@ this project are listed below and explained in detail:
 - Decision Tree
 - Random Forest
 
-<p align="center">
-  <img src="./assets/models.png">
-</p>
-
 ## Discussion and Results
 
 It is observed that most models have accuracy, sensitivity, and specificity in the 
